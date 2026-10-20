@@ -1,0 +1,8 @@
+# Smoke test on the Pulau Padang 30 m LiDAR DTM (stand-in KHG = DTM footprint). Run from the repo root:
+#   python -m repeat_delineation --config configs/pulau_padang.yaml
+khg: examples/pulau_padang/khg_pulau_padang.gpkg
+khg_id_field: khg_id
+cache_dir: cache
+out: out_pulau_padang
+rasters:
+  dtm: examples/pulau_padang/data/dtm_30m.tif

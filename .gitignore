@@ -1,0 +1,8 @@
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+cache/
+out_*/
+examples/pulau_padang/output/
+examples/pulau_padang/data/dtm_10m.tif

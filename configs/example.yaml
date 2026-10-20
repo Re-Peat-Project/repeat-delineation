@@ -1,0 +1,18 @@
+# Copy, then edit the paths. Run:  python -m repeat_delineation --config configs/example.yaml
+# ${NAME} is replaced by the environment variable NAME (e.g. ${REPEAT_DATA}).
+khg: path/to/khg.gpkg            # KHG polygons
+khg_id_field: khg_id
+cache_dir: cache
+out: out_delineation
+rasters:
+  dtm: path/to/dtm_smooth.tif    # ground model; a DSM gives wrong catchments
+vectors:
+  canals: path/to/canals.gpkg    # optional
+  rivers: path/to/rivers.gpkg    # optional
+  lakes: null
+units:
+  subkhg:
+    canal_class_field: null            # e.g. KET_KANAL; null = every canal is an outlet channel
+    outlet_canal_classes: ["primer", "primary"]
+    min_area_km2: auto                 # or a number
+    merge: adjacent

@@ -111,6 +111,23 @@ def test_auto_minimum_area_reaches_the_target_count():
     assert 1 <= n_two <= 2 and a3 <= a2, (n_two, a3, a2)
 
 
+def test_flow_merge_prefers_the_neighbour_on_the_same_channel_line():
+    # same layout as the first test: piece 2 shares 6 edges with piece 1, 2 with piece 3, 4 with piece 4. Piece 2 drains to
+    # reach 20, which meets reach 30 (piece 3) at a junction; pieces 1 and 4 drain to unlinked reaches 10 and 40
+    lab = np.zeros((6, 10), int)
+    lab[:, 0:4] = 1
+    lab[:, 4] = 2
+    lab[0:2, 5:] = 3
+    lab[2:, 5:] = 4
+    sizes = np.bincount(lab.ravel(), minlength=5)
+    reach = np.array([0, 10, 20, 30, 40])
+    links = {10: {10}, 20: {20, 30}, 30: {20, 30}, 40: {40}}
+    contacts = _contacts(lab, np.zeros(lab.shape, bool))
+    m = _merge_small(sizes, contacts, 8, (reach, links))
+    assert m[2] == m[3] and len({m[1], m[3], m[4]}) == 3, m
+    assert _merge_small(sizes, contacts, 8)[2] == _merge_small(sizes, contacts, 8)[1]   # without flow: the longest border
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

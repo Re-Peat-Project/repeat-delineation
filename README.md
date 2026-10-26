@@ -48,6 +48,12 @@ Parameters (`units.subkhg.*`, defaults in `SUBKHG_DEFAULTS`): `burn_depth_m`, `s
 
 Field checks in the 2021 study found sub-KHG boundaries are the wide outlet canals, so mapped rivers and primary canals are always boundaries; DEM-derived streams only add boundaries where no mapped channel exists.
 
+## Method diagram and stability check
+
+[docs/delineation_flow.drawio](docs/delineation_flow.drawio): inputs, steps, outputs and the modules that read them, drawn from the code by `python docs/delineation_diagram.py [<KHG folder>]` (example numbers from that KHG's last run and stability test).
+
+`python -m repeat_delineation.stability --config <site>/delineation_stability.yaml` delineates one KHG with several DTMs, with noisy copies of a reference DTM and with several settings, then writes per-run agreement (adjusted Rand index, best-match IoU), and a map of how often each cell is a unit boundary. Example: `re-peat/sites/16.02.01_sugihan_lumpur/delineation_stability.yaml`. Needs matplotlib for the map.
+
 ## Examples
 
 [examples/pulau_padang/](examples/pulau_padang/README.md): scripts that run the delineation on the Pulau Padang LiDAR DTM at 10 and 30 m and plot it. Only the 30 m DTM (5 MB) is included; `aggregate.py` rebuilds the 10 m one from the 2 m source (set `PULAU_PADANG_DTM_2M`; sites other than `padang` read `REPEAT_DEM_RUNS`).(set `PULAU_PADANG_DTM_2M`; sites other than `padang` read `REPEAT_DEM_RUNS`).

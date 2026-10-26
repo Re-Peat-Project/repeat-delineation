@@ -38,7 +38,8 @@ SUBKHG_DEFAULTS = {
     "outlet_order": None,             # None = automatic; or an integer Strahler order
     "target_count": [6, 30],          # wanted number of sub-KHG per KHG (automatic mode)
     "min_area_km2": 5.0,              # smaller pieces are merged into a neighbour; "auto" = the smallest value that gives at most target_count[1] units
-    "merge": "adjacent",              # "adjacent": into the neighbour with the longest shared border; "nearest": earlier behaviour
+    "merge": "adjacent",              # "adjacent": into the neighbour with the longest shared border; "flow": prefer the divide
+                                      # neighbour that drains to the same channel line; "nearest": earlier behaviour
     "coastal_split_km2": 50.0,        # coast-draining catchments (no outlet channel) larger than this are
                                       # cut into compact pieces of about this size; None = no split
     "canal_class_field": None,        # e.g. "kelas"; None = every canal is an outlet channel
@@ -103,8 +104,9 @@ def _split_large(lab, coastal, max_px):
     return lab
 
 
-def _components(fdir, outlet, khg, split_px=None):
-    """Catchment of each channel reach, split into the two banks, as connected pieces (small ones still in)."""
+def _components(fdir, outlet, khg, split_px=None, with_reach=False):
+    """Catchment of each channel reach, split into the two banks, as connected pieces (small ones still in).
+    with_reach: also return, per piece, the reach it drains to and the reach links (see _reach_links)."""
     seg = _segments(outlet)
     term = _terminal(fdir, outlet)
     catch = seg.ravel()[term].reshape(seg.shape)
@@ -122,7 +124,27 @@ def _components(fdir, outlet, khg, split_px=None):
     if n and split_px:
         lab = _split_large(lab, catch == seg.max() + 1, split_px)
         n = int(lab.max())
-    return lab, int(n)
+    if not with_reach:
+        return lab, int(n)
+    reach = np.zeros(int(n) + 1, np.int64)
+    reach[lab[lab > 0]] = catch[lab > 0]                 # all cells of a piece drain to one reach (or the coast)
+    return lab, int(n), (reach, _reach_links(outlet, seg, int(seg.max()) + 1))
+
+
+def _reach_links(outlet, seg, coast):
+    """Reaches that meet at a junction, as {reach: set of linked reaches, itself included}. The coast is its own link."""
+    k = np.ones((3, 3))
+    nb = ndimage.convolve(outlet.astype(int), k, mode="constant") - 1
+    jl, nj = ndimage.label(outlet & (nb >= 3), structure=np.ones((3, 3)))
+    near = ndimage.grey_dilation(jl, size=(3, 3))
+    m = (seg > 0) & (near > 0)
+    links = {int(r): {int(r)} for r in np.unique(seg[seg > 0])}
+    links[coast] = {coast}
+    for j in np.unique(near[m]):
+        rs = set(np.unique(seg[m & (near == j)]).astype(int).tolist())
+        for r in rs:
+            links[r] |= rs
+    return links
 
 
 def _fill_labels(lab, khg):
@@ -150,10 +172,11 @@ def _contacts(filled, chan):
     return n, div, chn
 
 
-def _merge_small(sizes, contacts, min_px):
+def _merge_small(sizes, contacts, min_px, flow=None):
     """Merge pieces under min_px, smallest first, into the neighbour with the longest shared border across a divide
     (else across an outlet channel). Returns an array mapping old labels to new consecutive labels (0 stays 0).
-    A piece with no neighbour is left alone."""
+    A piece with no neighbour is left alone. flow = (reach per piece, reach links): then a divide neighbour that drains
+    to the same channel line (its reaches meet the piece's reaches at a junction) is preferred over a longer border."""
     import heapq
     n, div, chn = contacts
     size = {i: int(sizes[i]) for i in range(1, n + 1) if sizes[i] > 0}
@@ -165,7 +188,11 @@ def _merge_small(sizes, contacts, min_px):
         for x, y in ((a, b), (b, a)):
             nbr[x].setdefault(y, [0, 0])[1] += c
     parent = list(range(n + 1))
-    original = list(size)                                # every piece that exists, including those merged away below
+    original = list(size)
+    if flow is not None:
+        reach_of, links = flow
+        reaches = {i: {int(reach_of[i])} for i in size}
+        linked = lambda i, j: any(links.get(r, {r}) & reaches[j] for r in reaches[i])                                # every piece that exists, including those merged away below
     heap = [(v, i) for i, v in size.items() if v < min_px]
     heapq.heapify(heap)
     while heap:
@@ -173,7 +200,11 @@ def _merge_small(sizes, contacts, min_px):
         if i not in size or size[i] != sz or sz >= min_px or not nbr[i]:
             continue
         cand = nbr[i]
-        j = max(cand, key=lambda k: (cand[k][0] > 0, cand[k][0] if cand[k][0] > 0 else cand[k][1]))
+        if flow is None:
+            j = max(cand, key=lambda k: (cand[k][0] > 0, cand[k][0] if cand[k][0] > 0 else cand[k][1]))
+        else:
+            j = max(cand, key=lambda k: (cand[k][0] > 0 and linked(i, k), cand[k][0] > 0, cand[k][0] if cand[k][0] > 0 else cand[k][1]))
+            reaches[j] |= reaches.pop(i)
         size[j] += size.pop(i)
         for k, (d, c) in nbr.pop(i).items():
             if k == j:
@@ -207,13 +238,13 @@ def _merge_small(sizes, contacts, min_px):
 def _units_from_outlets(fdir, outlet, khg, min_px, split_px=None, merge="adjacent"):
     """Catchment of each channel reach, split into the two banks; small pieces merged.
     Returns (labels, number of units, number of pieces before merging). Cells not in a piece stay 0."""
-    lab, n = _components(fdir, outlet, khg, split_px)
+    lab, n, flow = _components(fdir, outlet, khg, split_px, with_reach=True)
     if n == 0:
         return lab, 0, 0
     sizes = np.bincount(lab.ravel(), minlength=n + 1)
     pieces = int((sizes[1:] > 0).sum())
-    if merge == "adjacent":
-        mapping = _merge_small(sizes, _contacts(_fill_labels(lab, khg), outlet), min_px)
+    if merge in ("adjacent", "flow"):
+        mapping = _merge_small(sizes, _contacts(_fill_labels(lab, khg), outlet), min_px, flow if merge == "flow" else None)
         lab = mapping[lab]
         return lab, int(len(np.unique(mapping[1:][sizes[1:] > 0]))), pieces
     keep = np.zeros(n + 1, bool)
@@ -222,10 +253,10 @@ def _units_from_outlets(fdir, outlet, khg, min_px, split_px=None, merge="adjacen
     return lab, int(keep.sum()), pieces
 
 
-def _units_auto(fdir, outlet, khg, split_px, hi, res):
-    """Like _units_from_outlets with the adjacent merge, but the minimum area is the smallest value (stepping 10% from
-    5 km2) at which at most `hi` units remain. Returns (labels, units, pieces, minimum area in km2)."""
-    lab, n = _components(fdir, outlet, khg, split_px)
+def _units_auto(fdir, outlet, khg, split_px, hi, res, merge="adjacent"):
+    """Like _units_from_outlets with the adjacent (or flow) merge, but the minimum area is the smallest value (stepping
+    10% from 5 km2) at which at most `hi` units remain. Returns (labels, units, pieces, minimum area in km2)."""
+    lab, n, flow = _components(fdir, outlet, khg, split_px, with_reach=True)
     if n == 0:
         return lab, 0, 0, 0.0
     sizes = np.bincount(lab.ravel(), minlength=n + 1)
@@ -233,7 +264,7 @@ def _units_auto(fdir, outlet, khg, split_px, hi, res):
     contacts = _contacts(_fill_labels(lab, khg), outlet)
     a = 5.0
     while True:
-        mapping = _merge_small(sizes, contacts, int(a * 1e6 / res ** 2))
+        mapping = _merge_small(sizes, contacts, int(a * 1e6 / res ** 2), flow if merge == "flow" else None)
         cnt = int(len(np.unique(mapping[1:][sizes[1:] > 0])))
         if cnt <= hi or a > 20000:
             return mapping[lab], cnt, pieces, round(a, 1)
@@ -331,8 +362,8 @@ def delineate(cfg: dict, khg_id: str, geom_ll, grid: Grid, cache: Path):
     min_px, split_px = ctx["min_px"], ctx["split_px"]
     merge = p.get("merge", "adjacent")
     pieces, chosen_area = None, (None if ctx["auto"] else float(p["min_area_km2"]))
-    if ctx["auto"] and merge != "adjacent":
-        raise ValueError('min_area_km2: auto needs merge: adjacent')
+    if ctx["auto"] and merge not in ("adjacent", "flow"):
+        raise ValueError('min_area_km2: auto needs merge: adjacent or flow')
     if fdir is None:   # no flow directions: fall back to land enclosed by mapped channels
         land = khg & ~ndimage.binary_dilation(base, iterations=1)
         lab, n = ndimage.label(land, structure=[[0, 1, 0], [1, 1, 1], [0, 1, 0]])
@@ -349,7 +380,7 @@ def delineate(cfg: dict, khg_id: str, geom_ll, grid: Grid, cache: Path):
             if not out_mask.any():
                 continue
             if ctx["auto"]:
-                l2, n2, pc, ca = _units_auto(fdir, out_mask, khg, split_px, hi, grid.res)
+                l2, n2, pc, ca = _units_auto(fdir, out_mask, khg, split_px, hi, grid.res, merge)
             else:
                 l2, n2, pc = _units_from_outlets(fdir, out_mask, khg, min_px, split_px, merge)
                 ca = chosen_area

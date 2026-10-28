@@ -3,7 +3,7 @@ import os
 
 from _common import DATA
 
-# folder of repeat-dem runs (demnas-corrections/runs); only the sites other than "padang" need it
+# folder of repeat-dem runs (repeat-dem/runs); only the sites other than "padang" need it
 RUNS = os.environ.get("REPEAT_DEM_RUNS", "")
 
 SITES = {

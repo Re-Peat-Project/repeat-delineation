@@ -21,7 +21,13 @@ python -m repeat_delineation --config my.yaml --sweep 5,20,50,100        # count
 python -m tests.test_delineate_merge ; python -m tests.test_config
 ```
 
-Copy [configs/example.yaml](configs/example.yaml) for a real KHG. Output: `<out>/subkhg_units.gpkg`, `<out>/delineation_report.json` (settings, inputs, pieces before and units after merging, areas), and per KHG `<cache_dir>/<khg>/subkhg.gpkg` with `static/stream_order.tif` and `static/flow_accumulation.tif` to check the result. Units are named `<khg_id>_S01`, `_S02`, north to south. Check the polygons, then give them to `repeat-prioritisation` as `units: {mode: vector, path: <out>/subkhg_units.gpkg}`; edit them first if needed, keeping `khg_id` and `unit_id`.
+`repeat-delineate` is the same command as `python -m repeat_delineation`. `--khg <file>` and `--out <folder>` override the config; `-v` logs more.
+
+Copy [configs/example.yaml](configs/example.yaml) for a real KHG. Output: `<out>/subkhg_units.gpkg`, `<out>/delineation_report.json` (settings, inputs, pieces before and units after merging, areas), `<out>/delineation_sweep.json` with `--sweep`, and per KHG `<cache_dir>/<khg>/subkhg.gpkg` with `static/stream_order.tif` and `static/flow_accumulation.tif` to check the result. Units are named `<khg_id>_S01`, `_S02`, north to south. Check the polygons, then give them to `repeat-prioritisation` as `units: {mode: vector, path: <out>/subkhg_units.gpkg}`; edit them first if needed, keeping `khg_id` and `unit_id`.
+
+## Per-KHG chain
+
+`re-peat/tools/khg_pipeline.py` (step `delineation`, once per DEM, in `repeat-delineation/.venv`) writes `re-peat/sites/<code>_<name>/<dem>/delineate.yaml` and runs `python -m repeat_delineation --config` on it. The DTM is the LiDAR clip (`01_dem/inputs/`) or `01_dem/processed/<dem>/dtm_smooth.tif` (else the benchmark's `01_dem/benchmark/04_processed/<dem>/`); output goes to `_khg/<code>_<name>/02_delineation/<dem>/`, cache to `cache/delineation_<dem>/`. Outlet canals there: `Kanal Primer`, `Kanal Sekunder`, with `min_area_km2: auto` and `merge: adjacent` (`re-peat/pipeline.yaml`).
 
 ## Inputs
 
@@ -30,8 +36,8 @@ Copy [configs/example.yaml](configs/example.yaml) for a real KHG. Output: `<out>
 | KHG polygon | `khg` | Clips the result |
 | DTM | `rasters.dtm` (required) | Flow routing |
 | Rivers, lakes | `vectors.rivers`, `vectors.lakes` | Always boundaries |
-| Canals | `vectors.canals` | Burned into the DTM; primary canals are boundaries |
-| Canal class column | `units.subkhg.canal_class_field` | Which canals are outlet channels (default: all) |
+| Canals | `vectors.canals` | Burned into the DTM; outlet canals are boundaries |
+| Canal class column | `units.subkhg.canal_class_field` | With `outlet_canal_classes` (default `primer`, `primary`), which canals are outlet channels (no field: all) |
 
 ## Method
 
@@ -40,13 +46,13 @@ Copy [configs/example.yaml](configs/example.yaml) for a real KHG. Output: `<out>
 3. Outlet channels = mapped rivers + outlet canals + DEM streams of order >= k. Streams start at 2 km2 of contributing area. k is picked automatically so the KHG gets 6-30 sub-KHG, or set `outlet_order`.
 4. Each cell is traced downstream to the first outlet cell. A sub-KHG is the catchment of one channel reach on one bank, so divides and outlet channels are the boundaries.
 5. Coast-draining catchments over 50 km2 are cut into compact pieces.
-6. Pieces under `min_area_km2` are merged, smallest first, into the neighbour they share the longest divide border with (`merge: adjacent`; an outlet-channel border only if there is no divide neighbour). `min_area_km2: auto` raises the minimum 10% at a time from 5 km2 until at most `target_count[1]` units remain. `merge: nearest` is the earlier behaviour (small pieces dropped, cells go to the nearest piece). Channel cells go to the nearest unit.
+6. Pieces under `min_area_km2` are merged, smallest first, into the neighbour they share the longest divide border with (`merge: adjacent`; an outlet-channel border only if there is no divide neighbour). `min_area_km2: auto` raises the minimum 10% at a time from 5 km2 until at most `target_count[1]` units remain. `merge: flow` prefers the divide neighbour that drains to the same channel line. `auto` needs `adjacent` or `flow`. `merge: nearest` is the earlier behaviour (small pieces dropped, cells go to the nearest piece). Channel cells go to the nearest unit.
 
 Without flow directions (`use_dem_streams: false`, or the hydrology fails), units are land enclosed by mapped channels. The count target is then ignored.
 
 Parameters (`units.subkhg.*`, defaults in `SUBKHG_DEFAULTS`): `burn_depth_m`, `stream_threshold_km2`, `outlet_order`, `target_count`, `min_area_km2` (number or `auto`), `merge`, `coastal_split_km2`, `canal_class_field`, `outlet_canal_classes`, `use_dem_streams`.
 
-Field checks in the 2021 study found sub-KHG boundaries are the wide outlet canals, so mapped rivers and primary canals are always boundaries; DEM-derived streams only add boundaries where no mapped channel exists.
+Field checks in the 2021 study found sub-KHG boundaries are the wide outlet canals, so mapped rivers and outlet canals are always boundaries; DEM-derived streams only add boundaries where no mapped channel exists.
 
 ## Method diagram and stability check
 
@@ -56,9 +62,9 @@ Field checks in the 2021 study found sub-KHG boundaries are the wide outlet cana
 
 ## Examples
 
-[examples/pulau_padang/](examples/pulau_padang/README.md): scripts that run the delineation on the Pulau Padang LiDAR DTM at 10 and 30 m and plot it. Only the 30 m DTM (5 MB) is included; `aggregate.py` rebuilds the 10 m one from the 2 m source (set `PULAU_PADANG_DTM_2M`; sites other than `padang` read `REPEAT_DEM_RUNS`).(set `PULAU_PADANG_DTM_2M`; sites other than `padang` read `REPEAT_DEM_RUNS`).
+[examples/pulau_padang/](examples/pulau_padang/README.md): scripts that run the delineation on the Pulau Padang LiDAR DTM at 10 and 30 m and plot it. Only the 30 m DTM (5 MB) is included; `aggregate.py` rebuilds the 10 m one from the 2 m source (set `PULAU_PADANG_DTM_2M`; sites other than `padang` read `REPEAT_DEM_RUNS`).
 
 ## Notes for the next steps
 
-- Config key `units.subkhg` is kept from the old combined program so existing site configs work; it can become `delineation:` when the site configs move to the hub.
+- Config key `units.subkhg` is kept from the old combined program; the hub's site configs (`re-peat/sites/`) and the chain's generated configs still use it.
 - Terrain limits the result: see the accuracy notes in `repeat-dem`. Delineation on a smoothed DEMNAS gives regional divides, not decimetre-scale ones.
